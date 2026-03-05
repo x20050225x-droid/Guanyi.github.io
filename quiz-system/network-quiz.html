@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TQC 網路管理實務 - 智慧備考系統</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #3498db;
+            --success: #27ae60;
+            --danger: #e74c3c;
+            --bg: #f8f9fa;
+        }
+
+        body { font-family: "Microsoft JhengHei", sans-serif; background-color: var(--bg); margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 850px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        
+        h1 { text-align: center; color: var(--primary); border-bottom: 3px solid var(--accent); padding-bottom: 15px; }
+
+        /* 儀表板區域 */
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; background: #f1f3f5; padding: 20px; border-radius: 10px; }
+        .stat-card { text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: var(--accent); }
+        
+        .progress-bar-bg { background: #dee2e6; height: 12px; border-radius: 6px; overflow: hidden; margin: 10px 0; }
+        .progress-bar-fill { background: var(--success); height: 100%; width: 0%; transition: 0.5s; }
+
+        /* 按鈕樣式 */
+        .btn-group { display: flex; flex-direction: column; gap: 12px; }
+        .btn { padding: 15px; font-size: 17px; border: none; border-radius: 8px; cursor: pointer; transition: 0.3s; font-weight: bold; color: white; }
+        .btn-primary { background: var(--accent); }
+        .btn-danger { background: var(--danger); }
+        .btn-outline { background: transparent; border: 2px solid var(--accent); color: var(--accent); }
+        .btn:hover { opacity: 0.9; transform: translateY(-2px); }
+
+        /* 測驗區域 */
+        .hidden { display: none; }
+        .question-box { margin: 20px 0; padding: 20px; border: 1px solid #eee; border-radius: 10px; }
+        .options-label { display: block; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        .options-label:hover { background-color: #f0f7ff; border-color: var(--accent); }
+        
+        /* 錯題分析 */
+        .analysis-item { margin-top: 15px; padding: 15px; border-left: 5px solid var(--danger); background: #fff5f5; border-radius: 4px; }
+        
+        #nav-controls { display: flex; justify-content: space-between; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>TQC 網路管理實務</h1>
+
+    <div id="start-screen">
+        <div class="dashboard">
+            <div class="stat-card">
+                <div>已精通題目</div>
+                <div id="mastered-count" class="stat-value">0 / 0</div>
+            </div>
+            <div class="stat-card">
+                <div>總體進度</div>
+                <div id="progress-percent" class="stat-value">0%</div>
+            </div>
+            <div style="grid-column: span 2;">
+                <div class="progress-bar-bg"><div id="main-progress" class="progress-bar-fill"></div></div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn btn-primary" onclick="startQuiz('smart')">🚀 智慧補強模式 (優先考弱項)</button>
+            <button class="btn btn-outline" onclick="startQuiz('random')">🎲 隨機綜合測驗</button>
+            <button class="btn btn-danger" onclick="resetData()" style="margin-top: 20px; font-size: 12px; opacity: 0.7;">重置所有練習紀錄</button>
+        </div>
+    </div>
+
+    <div id="quiz-area" class="hidden">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span id="question-id" style="color:#888;"></span>
+            <button onclick="quitQuiz()" style="background:none; border:none; color:red; cursor:pointer;">中斷退出</button>
+        </div>
+        <div id="progress-text" style="font-size: 0.9em; margin-bottom: 5px;"></div>
+        
+        <div class="question-box">
+            <div id="question-text" style="font-size: 1.2em; font-weight: bold; margin-bottom: 15px;"></div>
+            <div id="options-area"></div>
+        </div>
+
+        <div id="nav-controls">
+            <button id="submit-btn" class="btn btn-primary" style="width: 100%;" onclick="checkAnswer()">提交答案</button>
+            <button id="next-btn" class="btn btn-success hidden" style="width: 100%;" onclick="nextQuestion()">下一題</button>
+        </div>
+    </div>
+
+    <div id="result-area" class="hidden">
+        <h2 style="text-align:center;">測驗完成！</h2>
+        <div style="text-align:center; font-size: 32px; color: var(--accent); margin-bottom: 20px;">
+            得分：<span id="final-score">0</span>
+        </div>
+        <div id="analysis-list"></div>
+        <button class="btn btn-primary" style="width: 100%; margin-top: 20px;" onclick="location.reload()">回到首頁</button>
+    </div>
+</div>
+
+<script src="questions.js"></script>
+
+<script>
+    let currentQuizPool = [];
+    let currentIndex = 0;
+    let score = 0;
+    let userWrongAnswers = [];
+    const STORAGE_KEY = 'tqc_net_admin_data';
+
+    // 初始化數據
+    let userData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+        mastered: [], // 答對超過 2 次的題目 ID
+        weights: {}    // 題目 ID -> 答錯次數 (權重)
+    };
+
+    function saveData() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(userData));
+    }
+
+    // 更新儀表板
+    function updateDashboard() {
+        const total = questions.length;
+        const masteredCount = userData.mastered.length;
+        const percent = Math.round((masteredCount / total) * 100);
+        
+        document.getElementById('mastered-count').innerText = `${masteredCount} / ${total}`;
+        document.getElementById('progress-percent').innerText = `${percent}%`;
+        document.getElementById('main-progress').style.width = `${percent}%`;
+    }
+
+    // 開始測驗
+    function startQuiz(mode) {
+        score = 0;
+        currentIndex = 0;
+        userWrongAnswers = [];
+        
+        if (mode === 'smart') {
+            // 權重算法：答錯次數越多的題目出現頻率越高
+            currentQuizPool = [];
+            questions.forEach(q => {
+                const w = userData.weights[q.id] || 1;
+                for(let i=0; i<w; i++) currentQuizPool.push(q);
+            });
+            currentQuizPool.sort(() => Math.random() - 0.5);
+            currentQuizPool = currentQuizPool.slice(0, 10); // 每次智慧抽 10 題
+        } else {
+            currentQuizPool = [...questions].sort(() => Math.random() - 0.5).slice(0, 20);
+        }
+
+        document.getElementById('start-screen').classList.add('hidden');
+        document.getElementById('quiz-area').classList.remove('hidden');
+        showQuestion();
+    }
+
+    function showQuestion() {
+        const q = currentQuizPool[currentIndex];
+        document.getElementById('question-id').innerText = `題目編號: ${q.id} [${q.type === 'radio' ? '單選' : '複選'}]`;
+        document.getElementById('question-text').innerText = q.text;
+        document.getElementById('progress-text').innerText = `進度: ${currentIndex + 1} / ${currentQuizPool.length}`;
+        
+        const optionsArea = document.getElementById('options-area');
+        optionsArea.innerHTML = '';
+        
+        for (let key in q.options) {
+            const label = document.createElement('label');
+            label.className = 'options-label';
+            const inputType = q.type === 'radio' ? 'radio' : 'checkbox';
+            label.innerHTML = `
+                <input type="${inputType}" name="quiz-opt" value="${key}"> 
+                ${key}. ${q.options[key]}
+            `;
+            optionsArea.appendChild(label);
+        }
+        
+        document.getElementById('submit-btn').classList.remove('hidden');
+        document.getElementById('next-btn').classList.add('hidden');
+    }
+
+    function checkAnswer() {
+        const q = currentQuizPool[currentIndex];
+        const selected = Array.from(document.querySelectorAll('input[name="quiz-opt"]:checked')).map(i => i.value);
+        
+        if (selected.length === 0) return alert("請先選擇答案！");
+
+        const isCorrect = JSON.stringify(selected.sort()) === JSON.stringify(q.answer.sort());
+
+        if (isCorrect) {
+            score += (100 / currentQuizPool.length);
+            // 答對邏輯：權重減 1 (最低為 1)，如果連續答對則加入精通
+            if (!userData.mastered.includes(q.id)) userData.mastered.push(q.id);
+            if (userData.weights[q.id] > 1) userData.weights[q.id]--;
+        } else {
+            userWrongAnswers.push({ q, userAns: selected });
+            // 答錯邏輯：權重加 2
+            userData.weights[q.id] = (userData.weights[q.id] || 1) + 2;
+            // 從精通清單移除
+            userData.mastered = userData.mastered.filter(id => id !== q.id);
+        }
+
+        saveData();
+        
+        // 顯示回饋
+        const labels = document.querySelectorAll('.options-label');
+        labels.forEach(l => {
+            const val = l.querySelector('input').value;
+            if (q.answer.includes(val)) l.style.backgroundColor = '#d4edda';
+            if (selected.includes(val) && !q.answer.includes(val)) l.style.backgroundColor = '#f8d7da';
+        });
+
+        document.getElementById('submit-btn').classList.add('hidden');
+        document.getElementById('next-btn').classList.remove('hidden');
+    }
+
+    function nextQuestion() {
+        currentIndex++;
+        if (currentIndex < currentQuizPool.length) {
+            showQuestion();
+        } else {
+            showResult();
+        }
+    }
+
+    function showResult() {
+        document.getElementById('quiz-area').classList.add('hidden');
+        document.getElementById('result-area').classList.remove('hidden');
+        document.getElementById('final-score').innerText = Math.round(score);
+
+        const list = document.getElementById('analysis-list');
+        list.innerHTML = '<h3>錯題回顧：</h3>';
+        if (userWrongAnswers.length === 0) {
+            list.innerHTML += '<p style="color:green;">太棒了！全部正確！</p>';
+        } else {
+            userWrongAnswers.forEach(item => {
+                list.innerHTML += `
+                    <div class="analysis-item">
+                        <strong>${item.q.text}</strong><br>
+                        你的答案: <span style="color:red">${item.userAns.join(',')}</span> | 
+                        正確答案: <span style="color:green">${item.q.answer.join(',')}</span>
+                    </div>
+                `;
+            });
+        }
+    }
+
+    function quitQuiz() {
+        if(confirm("確定要中斷測驗嗎？")) location.reload();
+    }
+
+    function resetData() {
+        if(confirm("確定要清空所有練習紀錄嗎？這不可復原。")) {
+            localStorage.removeItem(STORAGE_KEY);
+            location.reload();
+        }
+    }
+
+    updateDashboard();
+</script>
+
+</body>
+</html>
